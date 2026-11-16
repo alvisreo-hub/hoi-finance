@@ -1,0 +1,21 @@
+const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),assert=require('node:assert/strict');
+const root=path.resolve(__dirname,'..');
+const server={Date,JSON,Number,Object,Error,fail_:(code,message)=>{throw Object.assign(Error(message),{code})}};
+vm.createContext(server);vm.runInContext(fs.readFileSync(path.join(root,'Storage.gs'),'utf8'),server);
+const record={name:'Backdated',date:'2026-11-01',type:'expense',category:'Lainnya',amount:10000,note:'',submittedAt:'2099-01-01T00:00:00Z'};
+function row(event,id,base,at,t=record,action='put'){return ['1',event,id,action,base,t?JSON.stringify(t):'','one@example.com','one',at];}
+const rows=[row('create','a','','2026-11-16T01:00:00Z'),row('edit','a','create','2026-11-17T02:00:00Z',{...record,name:'Edited',date:'2026-10-31'}),row('stale','a','create','2026-11-18T00:00:00Z')];
+const result=server.replay_(rows),a=result.records[0];assert.equal(a.submittedAt,'2026-11-16T01:00:00Z');assert.equal(a.date,'2026-10-31');assert.equal(a.updatedAt,'2026-11-17T02:00:00Z');assert(result.rejected.stale);
+assert.equal(server.replay_([...rows,rows[0]]).records[0].submittedAt,a.submittedAt);
+assert.equal(server.replay_([row('legacy','legacy','','')]).records[0].submittedAt,'');
+assert.equal(server.replay_([...rows,row('del','a','edit','2026-11-19T00:00:00Z',null,'delete')]).records.length,0);
+const clientSource=fs.readFileSync(path.join(root,'Client.html'),'utf8');const start=clientSource.indexOf('function submissionTime('),end=clientSource.indexOf('function filtered()',start);assert(start>=0&&end>start);
+const client={Date,Intl,Number,String};vm.createContext(client);vm.runInContext(clientSource.slice(start,end),client);
+const records=[{id:'a',date:'2026-11-01',submittedAt:'2026-11-16T01:00:00Z',amount:20000},{id:'b',date:'2026-11-15',submittedAt:'2026-11-15T23:30:00Z',amount:5000},{id:'c',date:'2026-11-16',submittedAt:'2026-11-15T22:00:00Z',amount:1000},{id:'d',date:'2026-11-15',submittedAt:'',amount:100000}];
+const orders={'date-desc':'cbda','date-asc':'abdc','submittedAt-desc':'abcd','submittedAt-asc':'cbad','amount-desc':'dabc','amount-asc':'cbad'};
+for(const [order,expected] of Object.entries(orders))assert.equal(client.sortTransactions(records,order).map(r=>r.id).join(''),expected,order);
+assert.equal(records.map(r=>r.id).join(''),'abcd','sort must not mutate shared data');
+assert.equal(client.sortTransactions(records,'invalid').map(r=>r.id).join(''),'cbda');
+assert.equal(client.formatSubmitDate(''),'Tidak tersedia');assert.equal(client.formatSubmitDate('bad'),'Tidak tersedia');
+const display=client.formatSubmitDate('2026-11-15T18:30:00Z');assert.match(display,/16 Nov 2026/);assert.match(display,/01[.:]30[.:]00/);assert.match(display,/WIB/);
+console.log('PASS: server-derived first submit time; edits/backdating do not change it; supplied timestamps ignored; legacy/rejected/duplicate/deleted events; six sort orders; numeric amount; missing dates last; non-mutating deterministic sorting; WIB display.');

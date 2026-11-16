@@ -11,6 +11,15 @@
   <title>HOI Finance — Keuangan lebih terarah</title>
 
   <?!= include_('Styles'); ?>
+  <style>
+    .filters{flex-wrap:wrap}.filters input{flex:1;min-width:160px}
+    #sortOrder{min-width:205px}.date-help{font-size:10px;margin:-4px 0 16px;color:#7f8ba1}
+    .table-scroll-hint{display:none}
+    .sort-button{border:0;padding:0;background:transparent;color:inherit;font:inherit;letter-spacing:inherit;display:inline-flex;align-items:center;gap:6px;text-align:inherit}
+    th[aria-sort=ascending],th[aria-sort=descending]{color:var(--blue)}
+    .submitted-date{font-variant-numeric:tabular-nums}.transactions table{min-width:760px}
+    @media(max-width:780px){#sortOrder{flex-basis:100%;width:100%;min-width:0}.filters input{min-width:0}.date-help{font-size:10px;line-height:1.6}.table-scroll-hint{display:block;margin-top:5px}}
+  </style>
 </head>
 
 <body>
@@ -271,7 +280,18 @@
           >
             <option value="all">Semua kategori</option>
           </select>
+
+          <select id="sortOrder" aria-label="Urutkan transaksi">
+            <option value="date-desc">Tanggal transaksi — terbaru</option>
+            <option value="date-asc">Tanggal transaksi — terlama</option>
+            <option value="submittedAt-desc">Tanggal submit — terbaru</option>
+            <option value="submittedAt-asc">Tanggal submit — terlama</option>
+            <option value="amount-desc">Jumlah — terbesar</option>
+            <option value="amount-asc">Jumlah — terkecil</option>
+          </select>
         </div>
+
+        <p class="date-help">Tanggal transaksi: kapan transaksi terjadi. Tanggal submit: kapan pertama kali dicatat, otomatis dalam WIB dan tetap saat diedit.<span class="table-scroll-hint">Geser tabel ke samping untuk melihat semua kolom.</span></p>
 
         <div class="tablewrap">
           <table>
@@ -279,8 +299,9 @@
               <tr>
                 <th>TRANSAKSI</th>
                 <th>KATEGORI</th>
-                <th>TANGGAL</th>
-                <th class="right">JUMLAH</th>
+                <th aria-sort="descending"><button type="button" class="sort-button" data-sort-key="date" aria-label="Urutkan tanggal transaksi">TANGGAL TRANSAKSI <span data-sort-indicator aria-hidden="true">↓</span></button></th>
+                <th aria-sort="none"><button type="button" class="sort-button" data-sort-key="submittedAt" aria-label="Urutkan tanggal submit">TANGGAL SUBMIT <span data-sort-indicator aria-hidden="true">↕</span></button></th>
+                <th class="right" aria-sort="none"><button type="button" class="sort-button" data-sort-key="amount" aria-label="Urutkan jumlah">JUMLAH <span data-sort-indicator aria-hidden="true">↕</span></button></th>
                 <th></th>
               </tr>
             </thead>
@@ -360,7 +381,7 @@
         </label>
 
         <label>
-          Tanggal
+          Tanggal transaksi
           <input id="date" type="date" required>
         </label>
       </div>
