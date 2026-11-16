@@ -267,6 +267,20 @@ function apiWrite(token, mutation) {
         );
       }
 
+      // Only additions need duplicate confirmation. Always check the latest Sheet under lock.
+      if (op.action === 'put' && !current) {
+        const details = duplicateDetails_(session, state, op);
+        if (details && !constantEqual_(
+          details.confirmationKey,
+          typeof mutation.confirmationKey === 'string' ? mutation.confirmationKey : ''
+        )) {
+          const error = new Error('Ada transaksi dengan tanggal dan nominal yang sama.');
+          error.hoiCode = 'DUPLICATE';
+          error.details = details;
+          throw error;
+        }
+      }
+
       const row = [
         '1',
         op.eventId,
@@ -306,6 +320,42 @@ function apiWrite(token, mutation) {
   });
 }
 
+function duplicateDetails_(session, state, op) {
+  const incoming = JSON.parse(op.payload);
+  const matches = state.records.filter(function (record) {
+    return record.id !== op.id &&
+      record.date === incoming.date &&
+      record.amount === incoming.amount;
+  });
+  if (!matches.length) return null;
+  const versions = matches.map(function (record) {
+    return [record.id, record.version];
+  }).sort(function (a, b) {
+    return a[0].localeCompare(b[0]);
+  });
+  // The proof is bound to this user, exact draft, event ID and current duplicate set.
+  const confirmationKey = hmac_(JSON.stringify({
+    user: session.user.email,
+    eventId: op.eventId,
+    id: op.id,
+    payload: op.payload,
+    matches: versions
+  }), session.config.secret);
+  return {
+    confirmationKey: confirmationKey,
+    count: matches.length,
+    date: incoming.date,
+    amount: incoming.amount,
+    duplicates: matches.slice(0, 5).map(function (record) {
+      return {
+        name: record.name,
+        type: record.type,
+        recorder: record.recorder || record.updatedBy || ''
+      };
+    })
+  };
+}
+
 function apiLogout(token) {
   return apiResult_(function () {
     const session = authenticate_(token);
@@ -334,18 +384,18 @@ function response_(session, state) {
 
 function apiResult_(fn) {
   try {
-    return {
-      ok: true,
-      data: fn()
-    };
+    return {ok: true, data: fn()};
   } catch (error) {
-    return {
+    const result = {
       ok: false,
       code: error.hoiCode || 'SERVER',
-      message: error.hoiCode
-        ? error.message
-        : 'Layanan belum tersedia. Periksa setup, izin Sheet, atau kuota Apps Script; lalu coba lagi.'
+      message: error.hoiCode ? error.message :
+        'Layanan belum tersedia. Periksa setup, izin Sheet, atau kuota Apps Script; lalu coba lagi.'
     };
+    if (error.hoiCode === 'DUPLICATE' && error.details) {
+      result.details = error.details;
+    }
+    return result;
   }
 }
 
