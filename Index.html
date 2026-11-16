@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta
+    name="viewport"
+    content="width=device-width,initial-scale=1"
+  >
+  <meta name="theme-color" content="#244ce4">
+  <title>HOI Finance — Keuangan lebih terarah</title>
+
+  <?!= include_('Styles'); ?>
+</head>
+
+<body>
+  <aside>
+    <a class="brand" href="#">
+      <span class="logo">h.</span>
+      HOI<span>Finance</span>
+    </a>
+
+    <div class="navlabel">WORKSPACE PRIBADI</div>
+
+    <nav>
+      <button class="active" data-page="overview">
+        ◫ <span>Ringkasan</span>
+      </button>
+
+      <button data-page="transactions">
+        ⇄ <span>Transaksi</span>
+      </button>
+
+      <button data-page="reports">
+        ▥ <span>Laporan</span>
+      </button>
+    </nav>
+
+    <div class="sidebottom">
+      <div class="privacy">
+        ◈
+        <b>Ruang keuanganmu.</b>
+        <p>
+          Langkah kecil hari ini,<br>
+          lebih tenang esok hari.
+        </p>
+      </div>
+
+      <div class="user">
+        <span>H</span>
+        <div>
+          <b>Akun pribadi</b>
+          <small>Dua pengguna · satu Sheet</small>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <div class="shell">
+    <header>
+      <span>
+        Workspace <i>/</i>
+        <b id="breadcrumb">Ringkasan</b>
+      </span>
+
+      <div class="header-right">
+        <span class="saved">● Google Sheet bersama</span>
+        <span class="avatar">H</span>
+      </div>
+    </header>
+
+    <main>
+      <div class="heading">
+        <div>
+          <div class="eyebrow">
+            YOUR MONEY, A LITTLE CLEARER
+          </div>
+
+          <h1 id="title">Keuangan lebih terarah.</h1>
+
+          <p id="subtitle">
+            Semua pemasukan dan pengeluaran,
+            dalam satu tempat.
+          </p>
+        </div>
+
+        <button class="primary" id="add">
+          ＋ Tambah transaksi
+        </button>
+      </div>
+
+      <div class="toolbar">
+        <div class="tabs">
+          <button class="active" data-period="month">
+            Bulanan
+          </button>
+
+          <button data-period="week">
+            Mingguan
+          </button>
+        </div>
+
+        <div class="dates">
+          <button
+            id="prev"
+            aria-label="Periode sebelumnya"
+          >‹</button>
+
+          <span id="periodLabel"></span>
+
+          <button
+            id="next"
+            aria-label="Periode berikutnya"
+          >›</button>
+        </div>
+
+        <button class="outline" id="export">
+          ↗ Ekspor CSV
+        </button>
+      </div>
+
+      <section class="sheet-storage">
+        <div>
+          <b>Keuangan bersama · Google Sheets</b>
+
+          <p
+            id="sheetStatus"
+            role="status"
+            aria-live="polite"
+          >
+            Login dengan email dan kunci akses pribadi
+            untuk membuka catatan bersama.
+          </p>
+
+          <p id="sheetIdentity"></p>
+        </div>
+
+        <div class="sheet-actions">
+          <button class="primary" id="login">
+            Login
+          </button>
+
+          <button class="outline" id="sync" disabled>
+            Sinkron ulang
+          </button>
+
+          <button class="outline" id="logout" hidden>
+            Keluar
+          </button>
+        </div>
+      </section>
+
+      <section class="stats">
+        <article class="balance">
+          <div class="card-label">
+            Saldo periode <span>↗</span>
+          </div>
+
+          <h2 id="balance"></h2>
+
+          <div class="balance-foot">
+            Pemasukan dikurangi pengeluaran
+            <span>◈</span>
+          </div>
+        </article>
+
+        <article>
+          <div class="card-label">
+            <span class="metric-icon green">↙</span>
+            Total pemasukan
+          </div>
+
+          <h2 id="income"></h2>
+
+          <p>
+            <span class="dot green-bg"></span>
+            Uang masuk periode ini
+          </p>
+        </article>
+
+        <article>
+          <div class="card-label">
+            <span class="metric-icon blue">↗</span>
+            Total pengeluaran
+          </div>
+
+          <h2 id="expense"></h2>
+
+          <p>
+            <span class="dot blue-bg"></span>
+            Uang keluar periode ini
+          </p>
+        </article>
+      </section>
+
+      <section class="charts" id="charts">
+        <article class="panel flow">
+          <div class="panel-title">
+            <div>
+              <h3>Arus keuangan</h3>
+              <p>
+                Lihat ritme pemasukan dan pengeluaranmu.
+              </p>
+            </div>
+
+            <div class="legend">
+              <span>● Pemasukan</span>
+              <span>● Pengeluaran</span>
+            </div>
+          </div>
+
+          <div id="chart"></div>
+        </article>
+
+        <article class="panel categories">
+          <div class="panel-title">
+            <div>
+              <h3>Pengeluaran per kategori</h3>
+              <p>Ke mana uangmu pergi?</p>
+            </div>
+
+            <span>↗</span>
+          </div>
+
+          <div class="donut-wrap">
+            <div class="donut" id="donut">
+              <div>
+                <small>Total pengeluaran</small>
+                <b id="donutTotal"></b>
+              </div>
+            </div>
+          </div>
+
+          <div id="categories"></div>
+        </article>
+      </section>
+
+      <section class="panel transactions">
+        <div class="panel-title">
+          <div>
+            <h3 id="tableTitle">Transaksi terbaru</h3>
+            <p>
+              Setiap catatan membawa lebih banyak kejelasan.
+            </p>
+          </div>
+
+          <button class="textbutton" id="viewAll">
+            Lihat semua transaksi →
+          </button>
+        </div>
+
+        <div class="filters">
+          <input
+            id="search"
+            placeholder="⌕  Cari transaksi…"
+            aria-label="Cari transaksi"
+          >
+
+          <select
+            id="typeFilter"
+            aria-label="Filter jenis"
+          >
+            <option value="all">Semua jenis</option>
+            <option value="income">Pemasukan</option>
+            <option value="expense">Pengeluaran</option>
+          </select>
+
+          <select
+            id="catFilter"
+            aria-label="Filter kategori"
+          >
+            <option value="all">Semua kategori</option>
+          </select>
+        </div>
+
+        <div class="tablewrap">
+          <table>
+            <thead>
+              <tr>
+                <th>TRANSAKSI</th>
+                <th>KATEGORI</th>
+                <th>TANGGAL</th>
+                <th class="right">JUMLAH</th>
+                <th></th>
+              </tr>
+            </thead>
+
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+
+        <div class="tablefooter">
+          <span id="count"></span>
+          <span>IDR · Rupiah Indonesia</span>
+        </div>
+      </section>
+
+      <footer>
+        <b>HOI Finance</b>
+        <span>
+          Lebih sadar mengelola, lebih bebas menjalani.
+        </span>
+        <span>Satu Sheet, dua pengguna.</span>
+      </footer>
+    </main>
+  </div>
+
+  <dialog id="modal">
+    <form id="form">
+      <div class="modal-head">
+        <div>
+          <small>CATAT KEUANGANMU</small>
+          <h2 id="modalTitle">Tambah transaksi</h2>
+        </div>
+
+        <button
+          type="button"
+          id="close"
+          aria-label="Tutup"
+        >×</button>
+      </div>
+
+      <input type="hidden" id="editId">
+
+      <label>
+        Jenis transaksi
+        <select id="type">
+          <option value="expense">Pengeluaran</option>
+          <option value="income">Pemasukan</option>
+        </select>
+      </label>
+
+      <label>
+        Nama transaksi
+        <input
+          id="name"
+          required
+          maxlength="100"
+          placeholder="Contoh: Makan siang"
+        >
+      </label>
+
+      <label>
+        Jumlah (Rp)
+        <input
+          id="amount"
+          type="number"
+          min="1"
+          max="999999999999"
+          step="1"
+          required
+          placeholder="0"
+        >
+      </label>
+
+      <div class="formgrid">
+        <label>
+          Kategori
+          <select id="category"></select>
+        </label>
+
+        <label>
+          Tanggal
+          <input id="date" type="date" required>
+        </label>
+      </div>
+
+      <label>
+        Catatan (opsional)
+        <input
+          id="note"
+          maxlength="200"
+          placeholder="Tambahkan detail…"
+        >
+      </label>
+
+      <p class="localnote">
+        Transaksi disimpan ke Google Sheet bersama
+        setelah server mengonfirmasi.
+        Nama akun yang login dicatat sebagai pencatat.
+      </p>
+
+      <div id="formError" role="alert"></div>
+
+      <button class="primary submit">
+        Simpan transaksi
+      </button>
+    </form>
+  </dialog>
+
+  <div id="toast" role="status"></div>
+
+  <dialog id="loginModal">
+    <form id="loginForm">
+      <div class="modal-head">
+        <div>
+          <small>RUANG KEUANGAN BERSAMA</small>
+          <h2>Masuk ke HOI Finance</h2>
+        </div>
+
+        <button
+          type="button"
+          id="closeLogin"
+          aria-label="Tutup"
+        >×</button>
+      </div>
+
+      <label>
+        Email pengguna
+        <input
+          id="loginEmail"
+          type="email"
+          required
+          autocomplete="username"
+          placeholder="nama@email.com"
+        >
+      </label>
+
+      <label>
+        Kunci akses pribadi
+        <input
+          id="accessKey"
+          type="password"
+          required
+          minlength="32"
+          maxlength="256"
+          autocomplete="current-password"
+          placeholder="Kunci yang diberikan pemilik aplikasi"
+        >
+      </label>
+
+      <p class="localnote">
+        Gunakan kunci akses HOI Finance,
+        bukan kata sandi Google.
+        Hanya dua akun yang didaftarkan pemilik
+        dapat membuka catatan bersama.
+      </p>
+
+      <div id="loginError" role="alert"></div>
+
+      <button class="primary submit" id="loginSubmit">
+        Masuk
+      </button>
+    </form>
+  </dialog>
+
+  <?!= include_('Client'); ?>
+</body>
+</html>

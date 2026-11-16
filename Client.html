@@ -1,0 +1,1301 @@
+<script>
+const HoiBridge = (() => {
+  const uuid = () => crypto.randomUUID();
+
+  const valid = transaction =>
+    transaction &&
+    typeof transaction.name === 'string' &&
+    transaction.name.trim() &&
+    transaction.name.length <= 100 &&
+    Number.isSafeInteger(transaction.amount) &&
+    transaction.amount > 0 &&
+    transaction.amount <= 999999999999 &&
+    /^\d{4}-\d{2}-\d{2}$/.test(transaction.date) &&
+    ['income', 'expense'].includes(transaction.type) &&
+    typeof transaction.note === 'string' &&
+    transaction.note.length <= 200;
+
+  function rpc(method, ...args) {
+    return new Promise((resolve, reject) => {
+      if (!window.google?.script?.run) {
+        reject(
+          Error(
+            'Buka URL deployment Apps Script /exec, bukan file HTML lokal.'
+          )
+        );
+        return;
+      }
+
+      const runner = google.script.run
+        .withSuccessHandler(response => {
+          if (!response?.ok) {
+            const error = Error(
+              response?.message ||
+              'Respons server tidak valid.'
+            );
+
+            error.code = response?.code || 'SERVER';
+
+            if (error.code === 'CONFLICT') {
+              error.name = 'ConflictError';
+            }
+
+            reject(error);
+            return;
+          }
+
+          resolve(response.data);
+        })
+        .withFailureHandler(() => {
+          reject(
+            Error(
+              'Koneksi ke Apps Script terputus. Sinkron ulang atau coba Simpan lagi pada draft yang sama.'
+            )
+          );
+        });
+
+      if (method === 'apiLogin') {
+        runner.apiLogin(...args);
+      } else if (method === 'apiRead') {
+        runner.apiRead(...args);
+      } else if (method === 'apiWrite') {
+        runner.apiWrite(...args);
+      } else if (method === 'apiLogout') {
+        runner.apiLogout(...args);
+      } else {
+        reject(Error('Operasi tidak diizinkan.'));
+      }
+    });
+  }
+
+  class Client {
+    constructor(token) {
+      this.token = token;
+    }
+
+    read() {
+      return rpc('apiRead', this.token);
+    }
+
+    event(
+      record,
+      base = '',
+      action = 'put',
+      id = record?.id || uuid(),
+      eventId = uuid()
+    ) {
+      const payload = action === 'put'
+        ? {
+            name: record.name.trim(),
+            date: record.date,
+            type: record.type,
+            category: record.category,
+            amount: record.amount,
+            note: record.note || ''
+          }
+        : null;
+
+      if (payload && !valid(payload)) {
+        throw Error('Isi transaksi tidak valid.');
+      }
+
+      return [
+        '1',
+        eventId,
+        id,
+        action,
+        base,
+        payload ? JSON.stringify(payload) : ''
+      ];
+    }
+
+    commit(row) {
+      return rpc('apiWrite', this.token, {
+        eventId: row[1],
+        id: row[2],
+        action: row[3],
+        baseVersion: row[4],
+        transaction: row[5]
+          ? JSON.parse(row[5])
+          : null
+      });
+    }
+  }
+
+  return {
+    Client,
+    rpc,
+    uuid,
+    valid
+  };
+})();
+
+const $ = selector =>
+  document.querySelector(selector);
+
+const money = amount =>
+  new Intl.NumberFormat('id-ID', {
+    style: 'currency',
+    currency: 'IDR',
+    maximumFractionDigits: 0
+  }).format(amount);
+
+const iso = date =>
+  `${date.getFullYear()}-${
+    String(date.getMonth() + 1).padStart(2, '0')
+  }-${
+    String(date.getDate()).padStart(2, '0')
+  }`;
+
+const cats = [
+  'Gift & Charity',
+  'Tabungan & Investasi',
+  'Makanan & Minuman',
+  'Kebutuhan Sehari-hari',
+  'Kebutuhan Peliharaan',
+  'Transportasi',
+  'Pengeluaran Rutin',
+  'Hobi & Hiburan',
+  'Kesehatan & Personal Care',
+  'Gaji',
+  'Freelance',
+  'Pendidikan',
+  'E Wallet',
+  'Lainnya'
+];
+
+const colors = [
+  '#2c51e8',
+  '#24ba91',
+  '#95b6f3',
+  '#b5e7da',
+  '#8a86d9',
+  '#e6bc75',
+  '#7866dd',
+  '#6c3da6',
+  '#9c40b3',
+  '#bf3b8a',
+  '#3fd45d',
+  '#9ad647',
+  '#c4bd37',
+  '#de9445'
+];
+
+const icons = [
+  '♧', '▢', '⇢', '▤', '♪', '♡', '↙', '↙', '⋯'
+];
+
+let period = 'month';
+let cursor = new Date();
+let page = 'overview';
+let data = [];
+
+const escape = value =>
+  String(value).replace(
+    /[&<>"']/g,
+    char => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    }[char])
+  );
+
+function range() {
+  let first = new Date(
+    cursor.getFullYear(),
+    cursor.getMonth(),
+    1
+  );
+
+  let last = new Date(
+    cursor.getFullYear(),
+    cursor.getMonth() + 1,
+    0
+  );
+
+  if (period === 'week') {
+    first = new Date(cursor);
+
+    first.setDate(
+      first.getDate() -
+      ((first.getDay() + 6) % 7)
+    );
+
+    last = new Date(first);
+    last.setDate(first.getDate() + 6);
+  }
+
+  return [iso(first), iso(last)];
+}
+
+function scoped() {
+  const [first, last] = range();
+
+  return data.filter(
+    transaction =>
+      transaction.date >= first &&
+      transaction.date <= last
+  );
+}
+
+function filtered() {
+  return scoped()
+    .filter(transaction => {
+      const matchesType =
+        $('#typeFilter').value === 'all' ||
+        transaction.type === $('#typeFilter').value;
+
+      const matchesCategory =
+        $('#catFilter').value === 'all' ||
+        transaction.category === $('#catFilter').value;
+
+      const matchesSearch = (
+        transaction.name + ' ' +
+        transaction.note + ' ' +
+        transaction.category
+      )
+        .toLowerCase()
+        .includes($('#search').value.toLowerCase());
+
+      return (
+        matchesType &&
+        matchesCategory &&
+        matchesSearch
+      );
+    })
+    .sort(
+      (a, b) => b.date.localeCompare(a.date)
+    );
+}
+
+function toast(message) {
+  $('#toast').textContent = message;
+  $('#toast').style.display = 'block';
+
+  clearTimeout(window.toastTimer);
+
+  window.toastTimer = setTimeout(() => {
+    $('#toast').style.display = 'none';
+  }, 3000);
+}
+
+function render() {
+  const list = scoped();
+
+  const income = list
+    .filter(transaction => transaction.type === 'income')
+    .reduce((sum, transaction) => sum + transaction.amount, 0);
+
+  const expense = list
+    .filter(transaction => transaction.type === 'expense')
+    .reduce((sum, transaction) => sum + transaction.amount, 0);
+
+  $('#income').textContent = money(income);
+  $('#expense').textContent = money(expense);
+  $('#balance').textContent = money(income - expense);
+  $('#donutTotal').textContent = money(expense);
+
+  const [first, last] = range();
+
+  $('#periodLabel').textContent = period === 'month'
+    ? cursor.toLocaleDateString('id-ID', {
+        month: 'long',
+        year: 'numeric'
+      })
+    : new Date(first + 'T12:00').toLocaleDateString(
+        'id-ID',
+        {
+          day: 'numeric',
+          month: 'short'
+        }
+      ) +
+      ' – ' +
+      new Date(last + 'T12:00').toLocaleDateString(
+        'id-ID',
+        {
+          day: 'numeric',
+          month: 'short',
+          year: 'numeric'
+        }
+      );
+
+  const sums = cats
+    .map((category, index) => ({
+      category,
+      index,
+      amount: list
+        .filter(
+          transaction =>
+            transaction.type === 'expense' &&
+            transaction.category === category
+        )
+        .reduce(
+          (sum, transaction) => sum + transaction.amount,
+          0
+        )
+    }))
+    .filter(item => item.amount)
+    .sort((a, b) => b.amount - a.amount);
+
+  let stop = 0;
+
+  $('#donut').style.background = expense
+    ? 'conic-gradient(' +
+      sums.map(item => {
+        const start = stop;
+        stop += item.amount / expense * 100;
+
+        return (
+          `${colors[item.index]} ` +
+          `${start}% ${stop}%`
+        );
+      }).join(',') +
+      ')'
+    : '#edf1f8';
+
+  $('#categories').innerHTML = sums.length
+    ? sums.map(item => `
+        <div class="catrow">
+          <span>
+            <i
+              class="dot"
+              style="background:${colors[item.index]}"
+            ></i>
+            ${escape(item.category)}
+          </span>
+
+          <b>
+            ${Math.round(item.amount / expense * 100)}%
+            · ${money(item.amount)}
+          </b>
+        </div>
+      `).join('')
+    : '<p>Belum ada pengeluaran.</p>';
+
+  chart(list);
+
+  const rows = filtered();
+
+  const visible = page === 'overview'
+    ? rows.slice(0, 5)
+    : rows;
+
+  $('#rows').innerHTML = visible.length
+    ? visible.map(transaction => `
+        <tr>
+          <td>
+            <span class="txicon">
+              ${icons[cats.indexOf(transaction.category)] || '⋯'}
+            </span>
+
+            <span class="txname">
+              ${escape(transaction.name)}
+
+              <small>
+                ${escape(
+                  (transaction.recorder || transaction.updatedBy || '') +
+                  (transaction.note ? ' · ' + transaction.note : '')
+                )}
+              </small>
+            </span>
+          </td>
+
+          <td>
+            <span class="badge">
+              ${escape(transaction.category)}
+            </span>
+          </td>
+
+          <td>
+            ${new Date(
+              transaction.date + 'T12:00'
+            ).toLocaleDateString('id-ID', {
+              day: 'numeric',
+              month: 'short',
+              year: 'numeric'
+            })}
+          </td>
+
+          <td class="amount right ${transaction.type}">
+            ${transaction.type === 'income' ? '+' : '−'}${money(transaction.amount)}
+          </td>
+
+          <td class="rowactions">
+            <button
+              data-edit="${escape(transaction.id)}"
+              aria-label="Edit ${escape(transaction.name)}"
+            >✎</button>
+
+            <button
+              data-delete="${escape(transaction.id)}"
+              aria-label="Hapus ${escape(transaction.name)}"
+            >×</button>
+          </td>
+        </tr>
+      `).join('')
+    : `
+      <tr>
+        <td colspan="5" class="empty">
+          Belum ada transaksi pada pilihan ini.
+        </td>
+      </tr>
+    `;
+
+  $('#count').textContent =
+    `Menampilkan ${visible.length} dari ${rows.length} transaksi`;
+
+  $('#charts').classList.toggle(
+    'hidden',
+    page === 'transactions'
+  );
+
+  $('.transactions').classList.toggle(
+    'hidden',
+    page === 'reports'
+  );
+
+  $('#viewAll').classList.toggle(
+    'hidden',
+    page !== 'overview'
+  );
+
+  $('#tableTitle').textContent =
+    page === 'transactions'
+      ? 'Semua transaksi'
+      : 'Transaksi terbaru';
+}
+
+function chart(list) {
+  const [first, last] = range();
+
+  const count = period === 'week'
+    ? 7
+    : Math.ceil(Number(last.slice(-2)) / 7);
+
+  const buckets = Array.from(
+    { length: count },
+    () => [0, 0]
+  );
+
+  for (const transaction of list) {
+    const index = period === 'week'
+      ? Math.round(
+          (
+            new Date(transaction.date + 'T12:00') -
+            new Date(first + 'T12:00')
+          ) / 86400000
+        )
+      : Math.floor(
+          (Number(transaction.date.slice(-2)) - 1) / 7
+        );
+
+    buckets[index][
+      transaction.type === 'income' ? 0 : 1
+    ] += transaction.amount;
+  }
+
+  const maximum = Math.max(...buckets.flat(), 1);
+
+  const top =
+    Math.ceil(maximum / 1000000) * 1000000 ||
+    1000000;
+
+  const width = 600;
+  const height = 220;
+  const left = 62;
+  const bottom = 185;
+  const plot = bottom - 15;
+  const step = (width - left - 10) / count;
+
+  let svg = '';
+
+  for (let index = 0; index < 5; index++) {
+    const y = 15 + index * plot / 4;
+
+    svg += `
+      <line
+        x1="${left}"
+        x2="595"
+        y1="${y}"
+        y2="${y}"
+        stroke="#edf1f7"
+        stroke-dasharray="4 5"
+      />
+
+      <text
+        x="${left - 12}"
+        y="${y + 3}"
+        text-anchor="end"
+        fill="#9aa5ba"
+        font-size="9"
+      >
+        ${(top * (1 - index / 4) / 1000000)
+          .toLocaleString('id-ID', {
+            maximumFractionDigits: 1
+          })} jt
+      </text>
+    `;
+  }
+
+  buckets.forEach((values, index) => {
+    const x = left + step * index + step / 2;
+    const barWidth = Math.min(17, step / 4);
+
+    values.forEach((value, type) => {
+      const barHeight = value / top * plot;
+
+      svg += `
+        <rect
+          x="${x + (type ? 3 : -barWidth - 3)}"
+          y="${bottom - barHeight}"
+          width="${barWidth}"
+          height="${barHeight}"
+          rx="4"
+          fill="${type ? '#2c51e8' : '#27bc93'}"
+        >
+          <title>
+            ${type ? 'Pengeluaran' : 'Pemasukan'}:
+            ${money(value)}
+          </title>
+        </rect>
+      `;
+    });
+
+    const label = period === 'week'
+      ? ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'][index]
+      : 'Minggu ' + (index + 1);
+
+    svg += `
+      <text
+        x="${x}"
+        y="210"
+        text-anchor="middle"
+        font-size="9"
+        fill="#9aa5ba"
+      >${label}</text>
+    `;
+  });
+
+  $('#chart').innerHTML = `
+    <svg
+      viewBox="0 0 ${width} ${height}"
+      role="img"
+      aria-label="Grafik pemasukan dan pengeluaran ${
+        period === 'week' ? 'harian' : 'per minggu'
+      }"
+    >${svg}</svg>
+  `;
+}
+
+let client = null;
+let actor = null;
+let busy = false;
+let refreshTask = null;
+let epoch = 0;
+let expires = 0;
+let draftId = '';
+let draftBase = '';
+let pendingRow = null;
+let sessionToken = '';
+
+const SESSION_KEY = 'hoi-apps-script-session-v1';
+
+const status = message => {
+  $('#sheetStatus').textContent = message;
+};
+
+function controls() {
+  const online =
+    !!client &&
+    Date.now() < expires;
+
+  $('#add').disabled = !online || busy;
+  $('#sync').disabled = !online || busy;
+  $('#login').disabled = busy;
+  $('#logout').hidden = !client;
+
+  document
+    .querySelectorAll('.rowactions button')
+    .forEach(button => {
+      button.disabled = !online || busy;
+    });
+
+  $('.submit').disabled = busy;
+}
+
+function apply(state) {
+  data = state.records;
+  actor = state.user || actor;
+
+  if (state.expiresAt) {
+    expires = state.expiresAt;
+  }
+
+  render();
+  controls();
+
+  $('#sheetIdentity').textContent = actor
+    ? 'Login sebagai ' + actor.email
+    : '';
+
+  status(
+    'Tersinkron · ' +
+    data.length +
+    ' transaksi · ' +
+    new Date().toLocaleTimeString('id-ID') +
+    ' · Google Sheet bersama'
+  );
+}
+
+function forgetSession() {
+  try {
+    sessionStorage.removeItem(SESSION_KEY);
+  } catch {}
+}
+
+function resetConnection() {
+  epoch++;
+  client = null;
+  actor = null;
+  expires = 0;
+  data = [];
+  refreshTask = null;
+  sessionToken = '';
+
+  forgetSession();
+  render();
+  controls();
+
+  $('#sheetIdentity').textContent = '';
+}
+
+function handleSessionError(error) {
+  if (error.code === 'SESSION') {
+    resetConnection();
+
+    status(
+      'Sesi berakhir. Login kembali. ' +
+      'Draft yang sedang dibuka belum tersimpan.'
+    );
+  } else {
+    status('Sinkron gagal: ' + error.message);
+  }
+}
+
+async function refresh() {
+  if (!client || busy) return;
+
+  if (Date.now() >= expires) {
+    resetConnection();
+    status('Sesi berakhir. Login kembali.');
+    return;
+  }
+
+  if (refreshTask) return refreshTask;
+
+  const current = epoch;
+  const source = client;
+
+  const task = (async () => {
+    try {
+      status('Membaca Google Sheet…');
+
+      const state = await source.read();
+
+      if (current === epoch) {
+        apply(state);
+      }
+    } catch (error) {
+      if (current === epoch) {
+        handleSessionError(error);
+        toast(error.message);
+      }
+    }
+  })();
+
+  refreshTask = task;
+
+  try {
+    await task;
+  } finally {
+    if (current === epoch) {
+      refreshTask = null;
+    }
+  }
+}
+
+async function write(row) {
+  if (!client || Date.now() >= expires) {
+    throw Error(
+      'Login kembali sebelum menyimpan.'
+    );
+  }
+
+  if (busy) {
+    throw Error(
+      'Tunggu penyimpanan sebelumnya selesai.'
+    );
+  }
+
+  busy = true;
+  controls();
+  status('Menyimpan ke Google Sheet…');
+
+  try {
+    if (refreshTask) {
+      await refreshTask;
+    }
+
+    if (!client) {
+      throw Error(
+        'Sesi berakhir. Login kembali.'
+      );
+    }
+
+    const state = await client.commit(row);
+
+    apply(state);
+    return true;
+  } catch (error) {
+    if (error.code === 'SESSION') {
+      handleSessionError(error);
+    } else {
+      status(
+        'Belum tersimpan: ' + error.message
+      );
+    }
+
+    if (error.name === 'ConflictError') {
+      try {
+        apply(await client.read());
+      } catch {}
+
+      status(
+        'Konflik perubahan: data terbaru dimuat. ' +
+        'Salin draft lalu buka ulang transaksi sebelum mengedit.'
+      );
+    }
+
+    throw error;
+  } finally {
+    busy = false;
+    controls();
+  }
+}
+
+function openForm(id) {
+  if (!client || busy) {
+    toast(
+      'Login terlebih dahulu untuk membuka catatan bersama.'
+    );
+    return;
+  }
+
+  const transaction = data.find(
+    item => item.id === id
+  );
+
+  draftId = transaction?.id || HoiBridge.uuid();
+  draftBase = transaction?.version || '';
+  pendingRow = null;
+
+  $('#form').reset();
+
+  $('#editId').value = transaction?.id || '';
+
+  $('#modalTitle').textContent = transaction
+    ? 'Edit transaksi'
+    : 'Tambah transaksi';
+
+  $('#name').value = transaction?.name || '';
+  $('#amount').value = transaction?.amount || '';
+  $('#type').value = transaction?.type || 'expense';
+
+  $('#category').value =
+    transaction?.category || cats[0];
+
+  $('#date').value =
+    transaction?.date || iso(new Date());
+
+  $('#note').value = transaction?.note || '';
+  $('#formError').textContent = '';
+
+  $('#modal').showModal();
+}
+
+$('#category').innerHTML = cats
+  .map(category => `<option>${category}</option>`)
+  .join('');
+
+$('#catFilter').innerHTML += cats
+  .map(category => `<option>${category}</option>`)
+  .join('');
+
+$('#add').onclick = () => openForm();
+
+$('#close').onclick = () => {
+  if (!busy) $('#modal').close();
+};
+
+$('#modal').addEventListener('cancel', event => {
+  if (busy) event.preventDefault();
+});
+
+$('#form').onsubmit = async event => {
+  event.preventDefault();
+
+  if (busy) return;
+
+  const entry = {
+    id: draftId,
+    name: $('#name').value.trim(),
+    amount: Number($('#amount').value),
+    date: $('#date').value,
+    type: $('#type').value,
+    category: $('#category').value,
+    note: $('#note').value.trim()
+  };
+
+  if (!HoiBridge.valid(entry)) {
+    $('#formError').textContent =
+      'Isi nama, tanggal, dan jumlah Rupiah bulat yang valid.';
+    return;
+  }
+
+  try {
+    const candidate = client.event(
+      entry,
+      draftBase,
+      'put',
+      draftId
+    );
+
+    if (
+      !pendingRow ||
+      pendingRow[5] !== candidate[5]
+    ) {
+      pendingRow = candidate;
+    }
+
+    await write(pendingRow);
+
+    cursor = new Date(entry.date + 'T12:00');
+
+    $('#search').value = '';
+    $('#typeFilter').value = 'all';
+    $('#catFilter').value = 'all';
+
+    render();
+    controls();
+
+    $('#modal').close();
+
+    toast(
+      'Transaksi tersimpan di Google Sheet bersama.'
+    );
+  } catch (error) {
+    $('#formError').textContent = error.message;
+  }
+};
+
+const pendingDeletes = new Map();
+
+$('#rows').onclick = async event => {
+  if (busy || !client) return;
+
+  const edit = event.target.closest('[data-edit]');
+  const remove = event.target.closest('[data-delete]');
+
+  if (edit) {
+    openForm(edit.dataset.edit);
+  }
+
+  if (remove) {
+    const transaction = data.find(
+      item => item.id === remove.dataset.delete
+    );
+
+    if (
+      !transaction ||
+      !confirm(
+        'Hapus transaksi ini dari catatan bersama?'
+      )
+    ) {
+      return;
+    }
+
+    try {
+      let row = pendingDeletes.get(transaction.id);
+
+      if (
+        !row ||
+        row[4] !== transaction.version
+      ) {
+        row = client.event(
+          null,
+          transaction.version,
+          'delete',
+          transaction.id
+        );
+
+        pendingDeletes.set(
+          transaction.id,
+          row
+        );
+      }
+
+      await write(row);
+      pendingDeletes.delete(transaction.id);
+
+      toast(
+        'Transaksi dihapus dari catatan bersama.'
+      );
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+};
+
+function setPage(nextPage) {
+  page = nextPage;
+
+  const titles = {
+    overview: [
+      'Keuangan lebih terarah.',
+      'Semua pemasukan dan pengeluaran berdua, dalam satu tempat.',
+      'Ringkasan'
+    ],
+    transactions: [
+      'Setiap transaksi, tercatat.',
+      'Catatan bersama dengan nama pencatat masing-masing.',
+      'Transaksi'
+    ],
+    reports: [
+      'Kenali ritme keuanganmu.',
+      'Laporan mingguan dan bulanan dari Google Sheet bersama.',
+      'Laporan'
+    ]
+  };
+
+  $('#title').textContent = titles[page][0];
+  $('#subtitle').textContent = titles[page][1];
+  $('#breadcrumb').textContent = titles[page][2];
+
+  document
+    .querySelectorAll('[data-page]')
+    .forEach(button => {
+      button.classList.toggle(
+        'active',
+        button.dataset.page === page
+      );
+    });
+
+  render();
+  controls();
+}
+
+document
+  .querySelectorAll('[data-page]')
+  .forEach(button => {
+    button.onclick = () =>
+      setPage(button.dataset.page);
+  });
+
+$('#viewAll').onclick = () =>
+  setPage('transactions');
+
+document
+  .querySelectorAll('[data-period]')
+  .forEach(button => {
+    button.onclick = () => {
+      period = button.dataset.period;
+
+      document
+        .querySelectorAll('[data-period]')
+        .forEach(item => {
+          item.classList.toggle(
+            'active',
+            item === button
+          );
+        });
+
+      render();
+      controls();
+    };
+  });
+
+function move(direction) {
+  if (period === 'month') {
+    cursor = new Date(
+      cursor.getFullYear(),
+      cursor.getMonth() + direction,
+      1
+    );
+  } else {
+    cursor.setDate(
+      cursor.getDate() + direction * 7
+    );
+  }
+
+  render();
+  controls();
+}
+
+$('#prev').onclick = () => move(-1);
+$('#next').onclick = () => move(1);
+
+['search', 'typeFilter', 'catFilter']
+  .forEach(id => {
+    $('#' + id).addEventListener(
+      id === 'search' ? 'input' : 'change',
+      () => {
+        render();
+        controls();
+      }
+    );
+  });
+
+$('#export').onclick = () => {
+  const list = filtered();
+
+  if (!list.length) {
+    toast(
+      'Tidak ada transaksi untuk diekspor.'
+    );
+    return;
+  }
+
+  const safe = value => {
+    let text = String(value ?? '');
+
+    if (/^\s*[=+@\-]/.test(text)) {
+      text = "'" + text;
+    }
+
+    return '"' +
+      text.replaceAll('"', '""') +
+      '"';
+  };
+
+  const csv =
+    '\uFEFFTanggal,Jenis,Nama,Kategori,Jumlah IDR,Catatan,Pencatat\r\n' +
+    list.map(transaction => [
+      transaction.date,
+      transaction.type === 'income'
+        ? 'Pemasukan'
+        : 'Pengeluaran',
+      transaction.name,
+      transaction.category,
+      transaction.amount,
+      transaction.note,
+      transaction.recorder
+    ].map(safe).join(',')).join('\r\n');
+
+  const url = URL.createObjectURL(
+    new Blob([csv], {
+      type: 'text/csv;charset=utf-8;'
+    })
+  );
+
+  const link = document.createElement('a');
+
+  link.href = url;
+  link.download =
+    `HOI-Finance-${range()[0]}-${range()[1]}.csv`;
+
+  link.click();
+
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+  }, 1000);
+};
+
+$('#login').onclick = () => {
+  $('#accessKey').value = '';
+  $('#loginError').textContent = '';
+  $('#loginModal').showModal();
+};
+
+$('#closeLogin').onclick = () => {
+  if (!busy) {
+    $('#loginModal').close();
+  }
+};
+
+$('#loginModal').addEventListener(
+  'cancel',
+  event => {
+    if (busy) event.preventDefault();
+  }
+);
+
+$('#loginForm').onsubmit = async event => {
+  event.preventDefault();
+
+  if (busy) return;
+
+  busy = true;
+  controls();
+
+  $('#loginSubmit').disabled = true;
+  $('#loginError').textContent = '';
+
+  const attempt = ++epoch;
+
+  try {
+    const email = $('#loginEmail').value.trim();
+    const key = $('#accessKey').value;
+
+    const result = await HoiBridge.rpc(
+      'apiLogin',
+      email,
+      key
+    );
+
+    $('#accessKey').value = '';
+
+    if (attempt !== epoch) return;
+
+    sessionToken = result.token;
+    client = new HoiBridge.Client(sessionToken);
+    actor = result.user;
+    expires = result.expiresAt;
+
+    try {
+      sessionStorage.setItem(
+        SESSION_KEY,
+        sessionToken
+      );
+    } catch {}
+
+    const state = await client.read();
+
+    if (attempt !== epoch) return;
+
+    apply(state);
+    $('#loginModal').close();
+
+    toast(
+      'Berhasil login. Catatan bersama sudah dimuat.'
+    );
+  } catch (error) {
+    if (attempt === epoch) {
+      resetConnection();
+
+      $('#accessKey').value = '';
+      $('#loginError').textContent = error.message;
+
+      status(
+        'Belum terhubung. Login untuk membuka catatan bersama.'
+      );
+    }
+  } finally {
+    busy = false;
+    controls();
+    $('#loginSubmit').disabled = false;
+  }
+};
+
+$('#sync').onclick = refresh;
+
+$('#logout').onclick = async () => {
+  if (busy) return;
+
+  busy = true;
+  controls();
+
+  const token = sessionToken;
+
+  try {
+    await HoiBridge.rpc(
+      'apiLogout',
+      token
+    );
+
+    resetConnection();
+
+    status(
+      'Sudah keluar. Data bersama tetap tersimpan di Google Sheet.'
+    );
+  } catch (error) {
+    if (error.code === 'SESSION') {
+      resetConnection();
+      status('Sesi sudah berakhir.');
+    } else {
+      toast(
+        'Logout server belum terkonfirmasi. Coba lagi saat koneksi pulih.'
+      );
+
+      status(error.message);
+    }
+  } finally {
+    busy = false;
+    controls();
+  }
+};
+
+setInterval(() => {
+  if (!document.hidden && !busy) {
+    refresh();
+  }
+}, 20000);
+
+document.addEventListener(
+  'visibilitychange',
+  () => {
+    if (!document.hidden) {
+      refresh();
+    }
+  }
+);
+
+render();
+controls();
+
+status(
+  'Login untuk membuka catatan keuangan bersama.'
+);
+
+(async () => {
+  let token = '';
+
+  try {
+    token =
+      sessionStorage.getItem(SESSION_KEY) || '';
+  } catch {}
+
+  if (!token) return;
+
+  const attempt = ++epoch;
+
+  busy = true;
+  controls();
+
+  status('Memeriksa sesi…');
+
+  try {
+    const source = new HoiBridge.Client(token);
+    const state = await source.read();
+
+    if (attempt !== epoch) return;
+
+    client = source;
+    sessionToken = token;
+
+    apply(state);
+  } catch (error) {
+    if (attempt === epoch) {
+      resetConnection();
+
+      status(
+        'Login kembali untuk membuka catatan bersama.'
+      );
+    }
+  } finally {
+    busy = false;
+    controls();
+  }
+})();
+</script>
