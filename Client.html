@@ -218,6 +218,7 @@ let period = 'month';
 let cursor = new Date();
 let page = 'overview';
 let data = [];
+let sortOrder = 'date-desc';
 
 const escape = value =>
   String(value).replace(
@@ -269,8 +270,54 @@ function scoped() {
   );
 }
 
+function submissionTime(value) {
+  if (!value) return null;
+  const result = Date.parse(value);
+  return Number.isFinite(result) ? result : null;
+}
+
+function formatSubmitDate(value) {
+  const time = submissionTime(value);
+  if (time === null) return 'Tidak tersedia';
+  return new Intl.DateTimeFormat('id-ID', {
+    timeZone: 'Asia/Jakarta', day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+  }).format(new Date(time)) + ' WIB';
+}
+
+function compareField(a, b, key, direction) {
+  const left = key === 'submittedAt' ? submissionTime(a.submittedAt) : a[key];
+  const right = key === 'submittedAt' ? submissionTime(b.submittedAt) : b[key];
+  // Missing historical timestamps always appear last, in either direction.
+  if (left === null || left === undefined) return right === null || right === undefined ? 0 : 1;
+  if (right === null || right === undefined) return -1;
+  const difference = typeof left === 'number' ? left - right : String(left).localeCompare(String(right));
+  return direction === 'asc' ? difference : -difference;
+}
+
+function sortTransactions(records, order) {
+  const allowed = ['date-desc','date-asc','submittedAt-desc','submittedAt-asc','amount-desc','amount-asc'];
+  const [key, direction] = (allowed.includes(order) ? order : 'date-desc').split('-');
+  return records.slice().sort((a, b) =>
+    compareField(a, b, key, direction) ||
+    compareField(a, b, 'date', 'desc') ||
+    compareField(a, b, 'submittedAt', 'desc') ||
+    String(a.id).localeCompare(String(b.id))
+  );
+}
+
+function updateSortControls() {
+  $('#sortOrder').value = sortOrder;
+  const [key, direction] = sortOrder.split('-');
+  document.querySelectorAll('[data-sort-key]').forEach(button => {
+    const active = button.dataset.sortKey === key;
+    button.closest('th').setAttribute('aria-sort', active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none');
+    button.querySelector('[data-sort-indicator]').textContent = active ? (direction === 'asc' ? '↑' : '↓') : '↕';
+  });
+}
+
 function filtered() {
-  return scoped()
+  const matching = scoped()
     .filter(transaction => {
       const matchesType =
         $('#typeFilter').value === 'all' ||
@@ -293,10 +340,8 @@ function filtered() {
         matchesCategory &&
         matchesSearch
       );
-    })
-    .sort(
-      (a, b) => b.date.localeCompare(a.date)
-    );
+    });
+  return sortTransactions(matching, sortOrder);
 }
 
 function toast(message) {
@@ -311,6 +356,7 @@ function toast(message) {
 }
 
 function render() {
+  updateSortControls();
   const list = scoped();
 
   const income = list
@@ -447,6 +493,10 @@ function render() {
             })}
           </td>
 
+          <td class="submitted-date" title="Waktu pertama kali dicatat, zona waktu WIB">
+            ${escape(formatSubmitDate(transaction.submittedAt))}
+          </td>
+
           <td class="amount right ${transaction.type}">
             ${transaction.type === 'income' ? '+' : '−'}${money(transaction.amount)}
           </td>
@@ -466,7 +516,7 @@ function render() {
       `).join('')
     : `
       <tr>
-        <td colspan="5" class="empty">
+        <td colspan="6" class="empty">
           Belum ada transaksi pada pilihan ini.
         </td>
       </tr>
@@ -1086,6 +1136,21 @@ $('#next').onclick = () => move(1);
     );
   });
 
+$('#sortOrder').onchange = () => {
+  sortOrder = $('#sortOrder').value;
+  render();
+  controls();
+};
+document.querySelectorAll('[data-sort-key]').forEach(button => {
+  button.onclick = () => {
+    const key = button.dataset.sortKey;
+    const [currentKey, currentDirection] = sortOrder.split('-');
+    sortOrder = key + '-' + (currentKey === key && currentDirection === 'desc' ? 'asc' : 'desc');
+    render();
+    controls();
+  };
+});
+
 $('#export').onclick = () => {
   const list = filtered();
 
@@ -1109,9 +1174,10 @@ $('#export').onclick = () => {
   };
 
   const csv =
-    '\uFEFFTanggal,Jenis,Nama,Kategori,Jumlah IDR,Catatan,Pencatat\r\n' +
+    '\uFEFFTanggal transaksi,Tanggal submit (WIB),Jenis,Nama,Kategori,Jumlah IDR,Catatan,Pencatat\r\n' +
     list.map(transaction => [
       transaction.date,
+      formatSubmitDate(transaction.submittedAt),
       transaction.type === 'income'
         ? 'Pemasukan'
         : 'Pengeluaran',

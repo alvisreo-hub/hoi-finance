@@ -284,6 +284,7 @@ function replay_(rows) {
         version: eventId,
         deleted: false,
         createdBy: prior ? prior.createdBy : email,
+        submittedAt: prior ? prior.submittedAt : at,
         updatedBy: email,
         recorder: name || email,
         updatedAt: at
