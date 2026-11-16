@@ -35,6 +35,7 @@ const HoiBridge = (() => {
             );
 
             error.code = response?.code || 'SERVER';
+            error.details = response?.details;
 
             if (error.code === 'CONFLICT') {
               error.name = 'ConflictError';
@@ -109,16 +110,44 @@ const HoiBridge = (() => {
       ];
     }
 
-    commit(row) {
-      return rpc('apiWrite', this.token, {
+    async commit(row) {
+      const mutation = {
         eventId: row[1],
         id: row[2],
         action: row[3],
         baseVersion: row[4],
-        transaction: row[5]
-          ? JSON.parse(row[5])
-          : null
-      });
+        transaction: row[5] ? JSON.parse(row[5]) : null
+      };
+      while (true) {
+        try {
+          return await rpc('apiWrite', this.token, mutation);
+        } catch (error) {
+          if (error.code !== 'DUPLICATE' || !error.details) throw error;
+          const details = error.details;
+          const date = new Date(details.date + 'T12:00').toLocaleDateString('id-ID', {
+            day: 'numeric', month: 'long', year: 'numeric'
+          });
+          const amount = new Intl.NumberFormat('id-ID', {
+            style: 'currency', currency: 'IDR', maximumFractionDigits: 0
+          }).format(details.amount);
+          const examples = details.duplicates.map(function (item) {
+            const type = item.type === 'income' ? 'Pemasukan' : 'Pengeluaran';
+            return '• ' + item.name + ' (' + type + ')' +
+              (item.recorder ? ' — ' + item.recorder : '');
+          }).join('\n');
+          const message = 'Kemungkinan transaksi duplikat\n\n' +
+            'Sudah ada ' + details.count + ' transaksi dengan:\n' +
+            'Tanggal: ' + date + '\nNominal: ' + amount + '\n\n' +
+            examples + (details.count > 5 ? '\n…dan transaksi lainnya.' : '') +
+            '\n\nTetap tambahkan transaksi ini?\nOK = simpan, Batal = kembali ke form.';
+          if (!window.confirm(message)) {
+            const cancelled = new Error('Penyimpanan dibatalkan. Transaksi tidak ditambahkan; draft tetap di form.');
+            cancelled.code = 'CANCELLED';
+            throw cancelled;
+          }
+          mutation.confirmationKey = details.confirmationKey;
+        }
+      }
     }
   }
 

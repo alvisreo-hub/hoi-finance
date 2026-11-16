@@ -1,0 +1,27 @@
+const path=require('node:path');const root=path.resolve(__dirname,'..');
+const vm=require('node:vm'),fs=require('node:fs'),assert=require('node:assert/strict'),crypto=require('node:crypto');
+let locked=false,writes=0;const state={entities:Object.create(null),events:Object.create(null),rejected:Object.create(null),records:[]};
+const ctx={Date,JSON,Error,Intl,console,LockService:{getScriptLock:()=>({waitLock(){assert(!locked);locked=true},releaseLock(){locked=false}})},authenticate_:t=>{if(!['a','b'].includes(t))throw Object.assign(Error('session'),{hoiCode:'SESSION'});return{user:{email:t+'@example.com',name:t},config:{secret:'unit-test-secret'}}},validateMutation_:m=>({id:m.id,eventId:m.eventId,action:m.action,baseVersion:m.baseVersion,payload:m.transaction?JSON.stringify(m.transaction):''}),readState_:()=>JSON.parse(JSON.stringify(state)),response_:(s,st)=>({records:st.records}),fail_:(code,message)=>{throw Object.assign(Error(message),{hoiCode:code})},hmac_:(v,k)=>crypto.createHmac('sha256',k).update(v).digest('hex'),constantEqual_:(a,b)=>a===b,HEADER_:Array(9),SpreadsheetApp:{flush(){}},sheet_:()=>({getLastRow:()=>writes+1,getMaxRows:()=>1000,getRange:()=>({setNumberFormat(){return this},setValues(rows){assert(locked);for(const row of rows){state.events[row[1]]=row;state.entities[row[2]]=row[3]==='delete'?{id:row[2],version:row[1],deleted:true}:{...JSON.parse(row[5]),id:row[2],version:row[1],recorder:row[7]};writes++;}state.records=Object.values(state.entities).filter(t=>!t.deleted);}})})};
+const mockNames=['authenticate_','validateMutation_','readState_','response_','fail_','hmac_','constantEqual_','sheet_'];const mocks=Object.fromEntries(mockNames.map(n=>[n,ctx[n]]));vm.createContext(ctx);vm.runInContext(fs.readFileSync(path.join(root,'Code.gs'),'utf8'),ctx);Object.assign(ctx,mocks);
+const record=(amount=10000,date='2026-11-16',type='expense')=>({name:'Test',amount,date,type,category:'Lainnya',note:''});
+const op=(id,t,baseVersion='',action='put',eventId='event-'+id)=>({id,eventId,action,baseVersion,transaction:t});
+const add=(id,t)=>ctx.apiWrite('a',op(id,t));
+assert(add('original',record()).ok);let response=add('second',record());assert.equal(response.code,'DUPLICATE');assert.equal(response.details.count,1);assert.equal(writes,1);assert.equal(locked,false);
+assert(add('other-date',record(10000,'2026-11-17')).ok);assert(add('other-amount',record(20000)).ok);
+response=ctx.apiWrite('b',op('cross-type',record(10000,'2026-11-16','income')));assert.equal(response.code,'DUPLICATE');const confirmed={...op('cross-type',record(10000,'2026-11-16','income')),confirmationKey:response.details.confirmationKey};assert(ctx.apiWrite('b',confirmed).ok);
+assert(ctx.apiWrite('a',op('original',record(), 'event-original','put','edit-original')).ok);
+assert.equal(ctx.apiWrite('a',{...op('bypass',record()),allowDuplicate:true}).code,'DUPLICATE');
+response=add('proof',record());assert.equal(ctx.apiWrite('a',{...op('proof',record(20000)),confirmationKey:response.details.confirmationKey}).code,'DUPLICATE');
+const beforeRetry=writes;assert(ctx.apiWrite('b',confirmed).ok);assert.equal(writes,beforeRetry);
+let confirmations=0,cancel=false,race=false;
+ctx.window={confirm(message){confirmations++;assert.match(message,/Tanggal:/);assert.match(message,/Nominal:/);if(race){race=false;const m=op('from-other-person',record());const d=ctx.apiWrite('b',m);assert(ctx.apiWrite('b',{...m,confirmationKey:d.details.confirmationKey}).ok);}return !cancel;}};
+ctx.rpc=async(method,token,mutation)=>{const r=ctx.apiWrite(token,mutation);if(!r.ok){const e=Error(r.message);e.code=r.code;e.details=r.details;throw e;}return r.data;};
+const clientSource=fs.readFileSync(path.join(root,'Client.html'),'utf8').replaceAll('\r\n','\n');assert(clientSource.includes('error.details = response?.details;'));const start=clientSource.indexOf('async commit(row)');assert(start>=0);const method=clientSource.slice(start,clientSource.indexOf('\n  }',start));vm.runInContext('class Client {constructor(token){this.token=token;}'+method+'};this.Client=Client;',ctx);
+(async()=>{
+ const client=new ctx.Client('a');cancel=true;const before=writes;await assert.rejects(()=>client.commit(['1','cancel-event','cancel-id','put','',JSON.stringify(record())]),e=>e.code==='CANCELLED');assert.equal(writes,before);
+ cancel=false;race=true;confirmations=0;await client.commit(['1','race-event','race-id','put','',JSON.stringify(record())]);assert.equal(confirmations,2);
+ confirmations=0;await client.commit(['1','race-event','race-id','put','',JSON.stringify(record())]);assert.equal(confirmations,0);
+ const del=op('other-amount',null,'event-other-amount','delete','delete-amount');assert(ctx.apiWrite('a',del).ok);assert(add('replace-deleted',record(20000)).ok);
+ assert.equal(ctx.apiWrite('invalid',op('bad',record())).code,'SESSION');assert.equal(locked,false);
+ console.log('PASS: exact amount/date; different date/amount; income/expense cross-match; additions only; cancellation; confirmation; concurrent second-user addition re-prompts; retry idempotency; tampered/stale proof rejection; tombstones; authentication; lock release.');
+})().catch(e=>{console.error(e);process.exitCode=1});
